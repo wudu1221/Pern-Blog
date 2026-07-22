@@ -6,7 +6,9 @@ import {
   FaSun,
   FaBars,
   FaTimes,
+  FaChevronDown,
 } from "react-icons/fa";
+import API from "../services/api";
 
 const Navbar = () => {
   const { user, logout } = useContext(AuthContext);
@@ -15,13 +17,29 @@ const Navbar = () => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
 
+  // Category Dropdown States
+  const [categories, setCategories] = useState([]);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [mobileCategoriesOpen, setMobileCategoriesOpen] = useState(false);
+
   useEffect(() => {
     const theme = localStorage.getItem("theme");
-
     if (theme === "dark") {
       document.documentElement.classList.add("dark");
       setDarkMode(true);
     }
+
+    // Fetch categories dynamically from backend
+   API.get("/categories")
+    .then((res) => {
+      // Handles both { data: [...] } and { categories: [...] }
+      const categoryList = res.data.data || res.data.categories || res.data || [];
+      setCategories(categoryList);
+    })
+    .catch((err) => {
+      console.error("Error fetching categories for Navbar:", err);
+      setCategories([]); // Fallback to empty array on error
+    });
   }, []);
 
   const toggleTheme = () => {
@@ -32,13 +50,19 @@ const Navbar = () => {
       document.documentElement.classList.add("dark");
       localStorage.setItem("theme", "dark");
     }
-
     setDarkMode(!darkMode);
   };
 
   const handleLogout = () => {
     logout();
     navigate("/login");
+  };
+
+  // Navigates to Home filtered by category
+  const handleCategorySelect = (categoryName) => {
+    setDropdownOpen(false);
+    setMenuOpen(false);
+    navigate(`/?category=${encodeURIComponent(categoryName)}`);
   };
 
   const navLinkClass = ({ isActive }) =>
@@ -89,12 +113,54 @@ const Navbar = () => {
               Home Articles
             </NavLink>
 
-            <NavLink
-              to="/categories"
-              className={navLinkClass}
+            {/* Dynamic Hover Dropdown for Categories */}
+            <div
+              className="relative py-2"
+              onMouseEnter={() => setDropdownOpen(true)}
+              onMouseLeave={() => setDropdownOpen(false)}
             >
-              Categories
-            </NavLink>
+              <div className="flex items-center gap-1.5 cursor-pointer">
+                <NavLink
+                  to="/categories"
+                  className={navLinkClass}
+                >
+                  Categories
+                </NavLink>
+                <FaChevronDown
+                  className={`text-xs text-slate-500 transition-transform duration-200 ${
+                    dropdownOpen ? "rotate-180 text-indigo-600" : ""
+                  }`}
+                />
+              </div>
+
+              {/* Hover Menu */}
+              {dropdownOpen && (
+                <div className="absolute top-full left-0 w-56 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-xl z-50 animate-in fade-in duration-150">
+                  <button
+                    onClick={() => handleCategorySelect("All")}
+                    className="w-full text-left px-4 py-2 text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-slate-700/50 transition-colors"
+                  >
+                    ✨ All Articles
+                  </button>
+
+                  <div className="my-1 border-t border-slate-100 dark:border-slate-700/50" />
+
+                  {categories.length === 0 ? (
+                    <div className="px-4 py-2 text-xs text-slate-400">Loading...</div>
+                  ) : (
+                    categories.map((cat) => (
+                      <button
+                        key={cat.id}
+                        onClick={() => handleCategorySelect(cat.name)}
+                        className="w-full text-left px-4 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-indigo-50 dark:hover:bg-slate-700 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+                      >
+                        {cat.name}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
 
             <NavLink
               to="/about"
@@ -209,13 +275,36 @@ const Navbar = () => {
                 Home Articles
               </NavLink>
 
-              <NavLink
-                to="/categories"
-                className={navLinkClass}
-                onClick={() => setMenuOpen(false)}
-              >
-                Categories
-              </NavLink>
+              {/* Mobile Category Accordion */}
+              <div>
+                <button
+                  onClick={() => setMobileCategoriesOpen(!mobileCategoriesOpen)}
+                  className="flex items-center justify-between w-full text-slate-600 dark:text-slate-300 text-sm font-medium"
+                >
+                  <span>Categories</span>
+                  <FaChevronDown className={`transition-transform ${mobileCategoriesOpen ? "rotate-180" : ""}`} />
+                </button>
+
+                {mobileCategoriesOpen && (
+                  <div className="pl-4 mt-2 flex flex-col gap-2 border-l-2 border-indigo-500">
+                    <button
+                      onClick={() => handleCategorySelect("All")}
+                      className="text-left text-xs font-bold text-indigo-600 dark:text-indigo-400"
+                    >
+                      All Articles
+                    </button>
+                    {categories.map((cat) => (
+                      <button
+                        key={cat.id}
+                        onClick={() => handleCategorySelect(cat.name)}
+                        className="text-left text-xs text-slate-500 dark:text-slate-400 hover:text-indigo-600"
+                      >
+                        {cat.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
 
               <NavLink
                 to="/about"

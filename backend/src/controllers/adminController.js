@@ -81,3 +81,79 @@ exports.approveComment = async (req, res) => {
     res.status(500).json({ message: 'Error approving comment.', error: error.message });
   }
 };
+// 5. GET ALL USERS (Admin Only)
+exports.getAdminUsers = async (req, res) => {
+  try {
+    const query = `
+      SELECT id, full_name, email, role, is_active, created_at 
+      FROM users 
+      ORDER BY created_at DESC;
+    `;
+    const result = await db.query(query);
+    res.status(200).json({ status: 'success', data: result.rows });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch users directory.', error: error.message });
+  }
+};
+
+// 6. UPDATE USER ROLE (e.g., Reader -> Publisher)
+exports.updateUserRole = async (req, res) => {
+  const { id } = req.params;
+  const { role } = req.body; // 'reader', 'publisher', or 'admin'
+
+  try {
+    await db.query('UPDATE users SET role = $1 WHERE id = $2', [role, id]);
+    res.status(200).json({ status: 'success', message: `User role successfully updated to ${role}.` });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to update user role.', error: error.message });
+  }
+};
+
+// 7. TOGGLE ACCOUNT ACTIVE STATUS (Deactivate/Reactivate)
+exports.toggleUserActive = async (req, res) => {
+  const { id } = req.params;
+  const { is_active } = req.body; // true or false
+
+  try {
+    await db.query('UPDATE users SET is_active = $1 WHERE id = $2', [is_active, id]);
+    const msg = is_active ? 'Account reactivated.' : 'Account deactivated/suspended.';
+    res.status(200).json({ status: 'success', message: msg });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to alter user account state.', error: error.message });
+  }
+};
+exports.getRevenueChartData = async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        TO_CHAR(created_at, 'Mon DD') AS date, 
+        SUM(amount)::NUMERIC AS revenue
+      FROM billing_history
+      WHERE status = 'completed'
+      GROUP BY TO_CHAR(created_at, 'Mon DD'), DATE(created_at)
+      ORDER BY DATE(created_at) ASC
+      LIMIT 7; -- Returns the last 7 active days
+    `;
+    const result = await db.query(query);
+    res.status(200).json({ status: 'success', data: result.rows });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch chart data.', error: error.message });
+  }
+};
+exports.getSignupChartData = async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        TO_CHAR(created_at, 'Mon DD') AS date, 
+        COUNT(id)::INT AS signups
+      FROM users
+      GROUP BY TO_CHAR(created_at, 'Mon DD'), DATE(created_at)
+      ORDER BY DATE(created_at) ASC
+      LIMIT 7;
+    `;
+    const result = await db.query(query);
+    res.status(200).json({ status: 'success', data: result.rows });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch signup analytics.', error: error.message });
+  }
+};

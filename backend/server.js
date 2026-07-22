@@ -9,6 +9,8 @@ const commentRoutes = require('./src/routes/commentRoutes');
 const userRoutes = require('./src/routes/userRoutes');
 const paymentRoutes = require('./src/routes/paymentRoutes');
 const adminRoutes = require('./src/routes/adminRoutes');
+const categoryRoutes = require('./src/routes/categoryRoutes'); // Import category routes
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -28,6 +30,10 @@ app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/payments', paymentRoutes);
 // 7. Admin Routes (Highly Secure)
 app.use('/api/v1/admin', adminRoutes);
+// 8. Category Routes (Public)
+app.use('/api/v1/categories', categoryRoutes);
+
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'))); // Serve uploaded files
 
  
 

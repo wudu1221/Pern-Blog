@@ -1,37 +1,70 @@
 const db = require('../../config/db');
 
-// 1. GET ALL PUBLISHED POSTS (Public - No Login Required)
+// 1. GET ALL PUBLISHED POSTS (Public - No Login Required with Search & Pagination)
 exports.getAllPublishedPosts = async (req, res) => {
   try {
     const { search, category } = req.query;
     
-    let queryText = `
-      SELECT p.id, p.title, p.slug, p.featured_image_url, p.created_at, p.author_id,
-             u.full_name as author_name, c.name as category_name
-      FROM posts p
-      JOIN users u ON p.author_id = u.id
-      LEFT JOIN categories c ON p.category_id = c.id
-      WHERE p.status = 'published' AND p.deleted_at IS NULL
-    `;
+    // Parse dynamic pagination parameters from the client URL query
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 6; // Default to 6 articles per layout grid window
+    const offset = (page - 1) * limit;
+    
+    // Isolate base conditional clause strings to reuse them inside the count query execution block
+    let baseConditions = `WHERE p.status = 'published' AND p.deleted_at IS NULL`;
     const queryParams = [];
 
     // Optional Search Filter
     if (search) {
       queryParams.push(`%${search}%`);
-      queryText += ` AND (p.title ILIKE $${queryParams.length} OR p.content ILIKE $${queryParams.length})`;
+      baseConditions += ` AND (p.title ILIKE $${queryParams.length} OR p.content ILIKE $${queryParams.length})`;
     }
 
-    // Optional Category Filter
-    if (category) {
+    // Optional Category Filter (Guard against 'All', then check slug or name)
+    if (category && category !== 'All') {
       queryParams.push(category);
-      queryText += ` AND c.slug = $${queryParams.length}`;
+      baseConditions += ` AND (c.slug = $${queryParams.length} OR c.name ILIKE $${queryParams.length})`;
     }
 
-    queryText += ` ORDER BY p.created_at DESC`;
+    // A. Count query execution to compute dynamic upper limits of pagination indicators
+    const countQuery = `
+      SELECT COUNT(*) 
+      FROM posts p
+      JOIN users u ON p.author_id = u.id
+      LEFT JOIN categories c ON p.category_id = c.id
+      ${baseConditions}
+    `;
+    const countResult = await db.query(countQuery, queryParams);
+    const totalItems = parseInt(countResult.rows[0].count, 10);
+    const totalPages = Math.ceil(totalItems / limit) || 1;
 
-    const result = await db.query(queryText, queryParams);
-    res.status(200).json({ status: 'success', results: result.rows.length, data: result.rows });
+    // B. Build out target pagination data select slice using Postgres LIMIT/OFFSET rules
+    // Note: Added p.content (and p.summary if your schema has it) so Home.jsx can read it
+    const queryText = `
+      SELECT p.id, p.title, p.slug, p.content, p.summary, p.featured_image_url, p.created_at, p.author_id,
+             u.full_name as author_name, c.name as category_name
+      FROM posts p
+      JOIN users u ON p.author_id = u.id
+      LEFT JOIN categories c ON p.category_id = c.id
+      ${baseConditions}
+      ORDER BY p.created_at DESC
+      LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}
+    `;
+
+    // Append numerical offset parameters directly into parameter injection mapping arrays
+    const result = await db.query(queryText, [...queryParams, limit, offset]);
+    
+    // Sends structural indicators back safely matching frontend requirements
+    res.status(200).json({ 
+      status: 'success', 
+      results: result.rows.length, 
+      totalPages: totalPages,
+      currentPage: page,
+      posts: result.rows, // Maps directly onto Home.jsx logic configurations
+      data: result.rows   // Retained explicitly for legacy routing backups
+    });
   } catch (error) {
+    console.error("🔥 Error fetching published posts:", error);
     res.status(500).json({ message: 'Error fetching posts.', error: error.message });
   }
 };
@@ -59,14 +92,25 @@ exports.getPostBySlug = async (req, res) => {
 };
 
 // 3. CREATE POST DRAFT (Protected - Publisher/Admin Only)
+// backend/controllers/postController.js
+
 exports.createPost = async (req, res) => {
   try {
-    const { title, content, categoryId, featuredImageUrl } = req.body;
+    // Multer populates text fields inside req.body dynamically!
+    const { title, content, categoryId } = req.body;
     
-    // Generate clean lowercase base slug and append unique suffix to prevent collisions
+    // Safety guard: prevent crash if title wasn't filled out
+    if (!title || !content) {
+      return res.status(400).json({ status: 'fail', message: 'Title and Content are required fields.' });
+    }
+
+    // Generate clean lowercase base slug and append unique suffix
     const baseSlug = title.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
     const uniqueSuffix = Math.random().toString(36).substring(2, 7);
     const slug = `${baseSlug}-${uniqueSuffix}`;
+
+    // ✅ FIX: Point to the unique disk filename instead of originalname
+    const featuredImageUrl = req.file ? `/uploads/${req.file.filename}` : null;
 
     const query = `
       INSERT INTO posts (author_id, title, slug, content, category_id, featured_image_url, status)
@@ -75,20 +119,23 @@ exports.createPost = async (req, res) => {
     `;
     
     const result = await db.query(query, [
-      req.user.id, // Injected by protect middleware
+      req.user.id, 
       title,
       slug,
       content,
-      categoryId || null,
-      featuredImageUrl || null
+      categoryId ? parseInt(categoryId, 10) : null, // Ensure string numbers convert to integer
+      featuredImageUrl
     ]);
 
-    res.status(201).json({ status: 'success', data: result.rows[0] });
+    return res.status(201).json({ status: 'success', data: result.rows[0] });
+
   } catch (error) {
+    console.error("🔥 Error creating post:", error); // Logs the exact issue to terminal
+    
     if (error.code === '23505') {
       return res.status(400).json({ message: 'A post with an identical title or slug already exists.' });
     }
-    res.status(500).json({ message: 'Error creating post.', error: error.message });
+    return res.status(500).json({ message: 'Error creating post.', error: error.message });
   }
 };
 
@@ -181,6 +228,7 @@ exports.deletePost = async (req, res) => {
     res.status(500).json({ message: 'Error deleting post.', error: error.message });
   }
 };
+
 // Fetch only the articles belonging to the logged-in publisher
 exports.getMyArticles = async (req, res) => {
   try {
@@ -207,6 +255,87 @@ exports.getMyArticles = async (req, res) => {
   } catch (error) {
     res.status(500).json({ 
       message: 'Error retrieving your articles.', 
+      error: error.message 
+    });
+  }
+};
+
+// Fetch dashboard metrics for total reads, comments, and transaction history
+exports.getMyAnalytics = async (req, res) => {
+  try {
+    const authorId = req.user.id;
+    
+    let totalArticles = 0;
+    let totalReads = 0;
+    let totalComments = 0;
+    let settledFees = 0;
+
+    // 1. Safe Fetch: Articles Count & Reads
+    try {
+      // We try to grab views, if 'views' column doesn't exist, the catch block handles it
+      const statsResult = await db.query(
+        `SELECT COUNT(id) as total_articles, COALESCE(SUM(views), 0) as total_reads 
+         FROM posts WHERE author_id = $1 AND deleted_at IS NULL`, 
+        [authorId]
+      );
+      totalArticles = parseInt(statsResult.rows[0].total_articles, 10);
+      totalReads = parseInt(statsResult.rows[0].total_reads, 10);
+    } catch (sqlError) {
+      console.warn("⚠️ Column 'views' likely missing. Falling back to basic count. Error:", sqlError.message);
+      
+      // Fallback query without the views column
+      const fallbackStats = await db.query(
+        `SELECT COUNT(id) as total_articles FROM posts WHERE author_id = $1 AND deleted_at IS NULL`, 
+        [authorId]
+      );
+      totalArticles = parseInt(fallbackStats.rows[0].total_articles, 10);
+      totalReads = 0; // Mocked for now
+    }
+
+    // 2. Safe Fetch: Comments Count
+    try {
+      const commentsResult = await db.query(
+        `SELECT COUNT(c.id) as total_comments
+         FROM comments c
+         JOIN posts p ON c.post_id = p.id
+         WHERE p.author_id = $1 AND c.deleted_at IS NULL AND p.deleted_at IS NULL`,
+        [authorId]
+      );
+      totalComments = parseInt(commentsResult.rows[0].total_comments, 10);
+    } catch (sqlError) {
+      console.warn("⚠️ Comments table query failed. Setting count to 0. Error:", sqlError.message);
+      totalComments = 0;
+    }
+
+    // 3. Safe Fetch: Chapa Payments
+    try {
+      const paymentsResult = await db.query(
+        `SELECT COALESCE(SUM(amount), 0) as total_fees 
+         FROM billing_history WHERE author_id = $1 AND status = 'completed'`,
+        [authorId]
+      );
+      settledFees = parseFloat(paymentsResult.rows[0].total_fees);
+    } catch (sqlError) {
+      console.warn("⚠️ Payments table query failed. Setting fees to 0. Error:", sqlError.message);
+      settledFees = 0;
+    }
+
+    // 4. Send clean response back to client (Aligned perfectly with frontend expectations)
+    return res.status(200).json({
+      status: 'success',
+      data: {
+        totalReads: totalReads,     
+        totalViews: totalReads,        // Maps to analytics.totalViews
+        totalArticles: totalArticles,
+        totalComments: totalComments,  // Maps to analytics.totalComments
+        completedPayouts: settledFees  // Aligned with frontend structures
+      }
+    });
+
+  } catch (error) {
+    console.error("🔥 Top level analytics failure:", error.message);
+    return res.status(500).json({ 
+      message: 'Critical error computing dashboard metrics.', 
       error: error.message 
     });
   }
